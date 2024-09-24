@@ -8,7 +8,7 @@ authors:
 
 **Author: Kevin Collins**
 
-*Last edited: 03/14/2023*
+*Last edited: 09/24/2024*
 
 Adopted from [Hosting an Azure Pipelines Build Agent in OpenShift](https://cloud.redhat.com/blog/hosting-an-azure-pipelines-build-agent-in-openshift)
 and [Kevin Chung Azure Pipelines OpenShift example](https://github.com/kevchu3/kevin-azure-pipelines-openshift)
@@ -60,6 +60,11 @@ In this step, we will configure OpenShift to build our container image leveragin
 Start by creating a new project
 ```bash
 oc new-project azure-build
+```
+
+Install the .NET image streams
+```bash
+oc create -f https://raw.githubusercontent.com/redhat-developer/s2i-dotnetcore/master/dotnet_imagestreams.json -n openshift
 ```
 
 Create the following artifacts that include a wrapper script for the build agent and an example BuildConfig that will build a .NET application using the Red Hat Universal Based Image for .NET
@@ -181,9 +186,15 @@ service-ca.crt:  9930 bytes
 ```
 Copy the value of the token.
 
-Retrieve the host of your cluster image regstry.
+Expose and retrieve the host of your cluster image regstry.
 ```bash
- oc get route default-route -n openshift-image-registry -o jsonpath='{.spec.host}'
+ oc patch config.imageregistry.operator.openshift.io/cluster --patch='{"spec":{"defaultRoute":true}}' --type=merge
+ 
+ oc patch config.imageregistry.operator.openshift.io/cluster --patch='[{"op": "add", "path": "/spec/disableRedirect", "value": true}]' --type=json
+
+ HOST=$(oc get route default-route -n openshift-image-registry --template='{{ .spec.host }}')'
+ 
+ echo $HOST
 ```
 Expected Output:
 ```
@@ -235,8 +246,9 @@ Select Kubernetes
 * Server Url - the api server you retrieved in the previous step
 
 * Secret - using the name of the secret that we retieved earlier that has token in the name run:
+
    ```bash
-   oc get secret azure-sa-token-2qrgw -o json
+   oc get secret azure-sa-token-<TOKEN ID> -o json
    ```
 
   Copy the entire json results and paste it in the Secret field
