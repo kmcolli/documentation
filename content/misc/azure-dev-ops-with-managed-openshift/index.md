@@ -3,12 +3,12 @@ date: '2023-03-14'
 title: Azure DevOps with Managed OpenShift
 tags: ["DevOps", "ADO", "Azure", "ARO", "ROSA"]
 authors:
-  - Kevin Collins
+  - Kevin Collins, Deepika Ranganathan
 ---
 
-**Author: Kevin Collins**
+**Author: Kevin Collins, Deepika Ranganathan**
 
-*Last edited: 09/24/2024*
+*Last edited: 09/27/2024*
 
 Adopted from [Hosting an Azure Pipelines Build Agent in OpenShift](https://cloud.redhat.com/blog/hosting-an-azure-pipelines-build-agent-in-openshift)
 and [Kevin Chung Azure Pipelines OpenShift example](https://github.com/kevchu3/kevin-azure-pipelines-openshift)
@@ -17,6 +17,8 @@ and [Kevin Chung Azure Pipelines OpenShift example](https://github.com/kevchu3/k
 Azure DevOps is a very popular DevOps tool that has a host of features including the ability for developers to create CI/CD pipelines.
 
 In this document, I will show you how to connect your Managed OpenShift Cluster to Azure DevOps end-to-end including running the pipeline build process in the cluster, setting up the OpenShift internal image registry to store the images, and then finally deploy a sample application.  To demonstrate the flexibility of Azure DevOps, I will be deploying to a ROSA cluster, however the same procudures will apply to if you choose to deploy to any other OCP Cluster.
+
+*This implementation has been tested on ROSA clusters up to the version 4.15.32 in HCP and 4.16.12 in Classic.*
 
 ## Prerequisites
 
@@ -37,10 +39,13 @@ While logged into your [Azure DevOps Organization](https://aex.dev.azure.com/me?
 
 
 Obtain a personal access token.  While in Azure DevOPs, select Personal Access Token under User Settings.
+
 ![azpat](./images/azpat.png)
 
 
+
 On the next screen, create a New Token.  In this example, we will create a token with Full Access.  Once you click create your token will be displayed.  Make sure to store it somewhere safe as you won't be able to see it again.  
+
 ![create-pat](./images/create-pat.png)
 
 ### Set Azure DevOps environment variables for your Azure DevOps instance
@@ -51,7 +56,7 @@ AZP_POOL=Default
 ```
 
 ## Host an Azure Pipelines Build Agent in OpenShift
-note: this is an abreviated version of this [blog](https://cloud.redhat.com/blog/hosting-an-azure-pipelines-build-agent-in-openshift) by Kevin Chung and Mark Dunnett.
+*Note: this is an abreviated version of this [blog](https://cloud.redhat.com/blog/hosting-an-azure-pipelines-build-agent-in-openshift) by Kevin Chung and Mark Dunnett.*
 
 In this step, we will configure OpenShift to build our container image leveraging Universal Base Images ( UBI )
 
@@ -118,9 +123,9 @@ azure-build-agent-5d7c455ffd-d2pcc   1/1     Running     0          46s
 
 ## Create an Azure DevOps Pipeline
 The pipeline we will create has three steps.
-1. build the image on the OpenShift cluster
-2. push the image to the internal registry of the OpenShift cluster
-3. deploy the application to the cluster
+1. Build the image on the OpenShift cluster
+2. Push the image to the internal registry of the OpenShift cluster
+3. Deploy the application to the cluster
 
 Before we can do steps 2 and 3, we need to create a service account in OpenShift to both authenticate with OpenShift to push an image and also the internal image registry.  
 
@@ -148,27 +153,14 @@ type: kubernetes.io/service-account-token
 EOF
 ```
 
- Retrieve the secret name that we just created that was a token associated with it.
-
-```bash
-  oc get secrets | grep azure-sa-token | awk '{ print $1 }'
-```
-
-expected output:
-
-```
-azure-sa-token-2qrgw
-```
-note: your output will have a different name
-
 Describe the secret to retrieve the token:
 
 ```bash
-oc describe secret <secret name>
+oc describe secret azure-sa-secret
 ```
 expected output:
 ```
-Name:         azure-sa-token-2qrgw
+Name:         azure-sa-secret
 Namespace:    ado-openshift
 Labels:       <none>
 Annotations:  kubernetes.io/created-by: openshift.io/create-dockercfg-secrets
@@ -192,7 +184,7 @@ Expose and retrieve the host of your cluster image regstry.
  
  oc patch config.imageregistry.operator.openshift.io/cluster --patch='[{"op": "add", "path": "/spec/disableRedirect", "value": true}]' --type=json
 
- HOST=$(oc get route default-route -n openshift-image-registry --template='{{ .spec.host }}')'
+ HOST=$(oc get route default-route -n openshift-image-registry --template='{{ .spec.host }}')
  
  echo $HOST
 ```
@@ -200,6 +192,7 @@ Expected Output:
 ```
 default-route-openshift-image-registry.apps.ado-rosa.9s68.p1.openshiftapps.com
 ```
+*Note the image registry url for usage later*
 
 Get the cluster api endpoint
 ```bash
@@ -211,7 +204,7 @@ expected output:
  Kubernetes control plane is running at https://api.ado-rosa.9s68.p1.openshiftapps.com:6443
 ```
 
-note the api server url for usage later 
+*Note the api server url for usage later*
 
 ### Configure Azure DevOps service connections for the registry and OpenShift
 
@@ -220,40 +213,45 @@ From Azure DevOps, click on Project settings ( the gear icon ), then Service Con
  
  ![create-service-connection](./images/create-service-connection.png)
 
+### 1. Service connection for registery
 
-Select Docker registry
- 
- ![docker-registry](./images/docker-registry.png)
+* Select 'Docker registry'
 
 Enter the settings we retrieved in the previous step:
 
-* Select Others for Docker Registry
-* Docker Registry - make sure to add https:// in front of the hostname you retrieved
-* Docker ID - the service account you created
-* Docker Password - the service account token
-* Service connection name - enter openshift-registry
+* Select 'Others' for Docker Registry
+* Docker Registry - Enter the image registery hostname. make sure to add **https://** in front of the hostname you retrieved. Eg: https://default-route-openshift-image-registry.apps.ado-rosa.9s68.p1.openshiftapps.com
+* Docker ID - Enter the service account name that you created. Eg: azure-sa
+* Docker Password - Enter the secret token value. You can retrieve using the following command. 
+```bash
+oc describe secret azure-sa-secret
+```
+* Service connection name - Enter openshift-registry
+ 
+ ![docker-registry](./images/docker-registry.png)
+ ![docker-registry-connection](./images/docker-registry-connection.png)
 
+### 2. Service connection for Openshift 
 Next, let's create a another serivce connection for our cluster.
 
 Click New service connection:
 
  ![new-service-connection](./images/new-service-connection.png)
 
-Select Kubernetes
+* Select Kubernetes
  
  ![select-kubernetes](./images/select-kubernetes.png)
 
-* Server Url - the api server you retrieved in the previous step
-
-* Secret - using the name of the secret that we retieved earlier that has token in the name run:
+* Server Url - the api server url that you retrieved 
+* Secret - use the name of the secret that we retieved earlier and run the following command.
+  
+Copy the entire json results and paste it in the Secret field
 
    ```bash
-   oc get secret azure-sa-token-<TOKEN ID> -o json
+   oc get secret azure-sa-secret -o json
    ```
 
-  Copy the entire json results and paste it in the Secret field
-
-* Service connection name - select openshift
+* Service connection name - Enter openshift
 
  ![openshift-settings](./images/openshift-connection.png)
 
